@@ -1,3 +1,7 @@
+"""
+Modified from https://github.com/simonw/db-to-sqlite to 
+support views and report errors.
+"""
 import itertools
 
 import click
@@ -11,6 +15,7 @@ from sqlite_utils import Database
 @click.argument("path", type=click.Path(exists=False), required=True)
 @click.option("--all", help="Detect and copy all tables", is_flag=True)
 @click.option("--table", help="Specific tables to copy", multiple=True)
+@click.option("--view", help="Specific views to copy", multiple=True)
 @click.option("--skip", help="When using --all skip these tables", multiple=True)
 @click.option(
     "--redact",
@@ -34,6 +39,7 @@ def cli(
     path,
     all,
     table,
+    view,
     skip,
     redact,
     sql,
@@ -75,9 +81,9 @@ def cli(
     db_conn = create_engine(connection, connect_args=conn_args).connect()
     inspector = inspect(db_conn)
     # Figure out which tables we are copying, if any
-    tables = table
+    tables = table + view
     if all:
-        tables = inspector.get_table_names()
+        tables = inspector.get_table_names() + inspector.get_view_names()
     if tables:
         foreign_keys_to_add = []
         for i, table in enumerate(tables):
@@ -106,9 +112,13 @@ def cli(
             count = None
             table_quoted = db_conn.dialect.identifier_preparer.quote_identifier(table)
             if progress:
-                count = db_conn.execute(
+                try:
+                    count = db_conn.execute(
                     text("select count(*) from {}".format(table_quoted))
                 ).fetchone()[0]
+                except Exception as e:
+                    click.echo(f"  ... skipping due to: {e}", err=True)
+                    continue
             results = db_conn.execute(text("select * from {}".format(table_quoted)))
             redact_these = redact_columns.get(table) or set()
             rows = (redacted_dict(r, redact_these) for r in results)
